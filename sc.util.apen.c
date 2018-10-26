@@ -11,19 +11,10 @@
 #include "ext.h"							// standard Max include, always required
 #include "ext_obex.h"						// required for new style Max object
 
-////////////////////////// helper struct
-typedef struct _apen_series
-{
-    double   *data_vector;
-    long     vector_size;
-} t_apen_series;
-
-
 ////////////////////////// object struct
 typedef struct _sc_util_apen
 {
 	t_object	            ob;
-    t_apen_series           *series;                    //pointer to hold array of data vectors
     long                    series_length;              //the current size of the array. Must be >= 1 <= series_max_length
     long                    series_max_length;          //the maximum size of the array, will be assigned a default value
     long                    series_vector_size;         //the size of the vector held at each point in the series
@@ -31,9 +22,7 @@ typedef struct _sc_util_apen
     long                    pattern_length;             //the number of points in the series considered in a single pattern
     long                    calc_on_input;              //flag to determine if ApEn should be calculated whenever new input is received
     long                    hold_size_warning;          //flag to determine if ApEn should print to the console when there is insufficient data to compute
-    t_systhread_mutex       c_mutex;                    //for ensuring critical areas are respected for operations on the data set
-    double*                 test_value; //testing sysmem functionality
-    t_atom		    val; //!!!REMOVE!!!
+    double*                 test_value;                 //holds data series. Will replace with Eigen Array/Matrix when moving to N-D vectors
 	void		            *out;                       //outlet
     void*                   out2;                       //dumpout
 } t_sc_util_apen;
@@ -55,10 +44,9 @@ void sc_util_apen_similarity(t_sc_util_apen *x, void *attr, long argc, t_atom *a
 void sc_util_apen_calc_on_input(t_sc_util_apen *x, void *attr, long argc, t_atom *argv);                         //sets whether or not to attempt calculating ApEn when a new data point is received
 void sc_util_apen_hold_size_warning(t_sc_util_apen *x, void *attr, long argc, t_atom *argv);                     //sets flag for showing insufficient data warnings
 
-t_apen_series create_apen_series(double* data, long size);                          //helper function to create an instance of data struct
-void add_apen_series(t_sc_util_apen *x, t_apen_series as);                                             //helper function to add to the data series
 t_max_err sc_util_apen_notify(t_sc_util_apen *x, t_symbol *s, t_symbol *msg, void *sender, void *data);
 
+//Attribute Getters
 void sc_util_apen_get_similarity(t_sc_util_apen *x, t_object *attr, long *argc, t_atom **argv);
 void sc_util_apen_get_coi(t_sc_util_apen *x, t_object *attr, long *argc, t_atom **argv);
 void sc_util_apen_get_series_length(t_sc_util_apen *x, t_object *attr, long *argc, t_atom **argv);
@@ -67,23 +55,18 @@ void sc_util_apen_set_cur_size(t_sc_util_apen *x, t_object *attr, long *argc, t_
 void sc_util_apen_get_vector_size(t_sc_util_apen *x, t_object *attr, long *argc, t_atom **argv);
 void sc_util_apen_get_pattern_length(t_sc_util_apen *x, t_object *attr, long *argc, t_atom **argv);
 void sc_util_apen_get_size_warning(t_sc_util_apen *x, t_object *attr, long *argc, t_atom **argv);
-void sc_util_apen_dump(t_sc_util_apen *x);
 
-void sc_util_apen_realloc_data(t_sc_util_apen *x, long vsize_new); //helper function to call when the series vector size is changed
-void sc_util_apen_copy_data(t_sc_util_apen *x); //helper function to call when the series length is changed
-void sc_util_apen_free_series_data(t_apen_series *x); //function to call when the series length has been shortened and data memory needs to be released
-void sc_util_apen_alloc_series_data(t_apen_series *x); //function to call when the series length has been extended and new memory needs to be allocated
+
+void sc_util_apen_dump(t_sc_util_apen *x); //Get a list of stored values out the right outlet
+
 void sc_util_apen_calculate(t_sc_util_apen *x); //function to actually calculate Approximate Entropy
 
 double sc_util_apen_maxdist(double* d0, double* d1, long l, double r); //get the maximum distance between pattern components
 void sc_util_apen_getstate(t_sc_util_apen* x); //output all values through the dumpout
 
-//!!!!from dummy, need to delete later!!!!!!
+//Functions for inputting new data
 void sc_util_apen_int(t_sc_util_apen *x, long n);
 void sc_util_apen_float(t_sc_util_apen *x, double f);
-void sc_util_apen_identify(t_sc_util_apen *x);
-void sc_util_apen_dblclick(t_sc_util_apen *x);
-void sc_util_apen_acant(t_sc_util_apen *x);
 
 //////////////////////// global class pointer variable
 void *sc_util_apen_class;
@@ -99,26 +82,12 @@ void ext_main(void *r)
 	class_addmethod(c, (method)sc_util_apen_bang,			    "bang",                             0);
     class_addmethod(c, (method)sc_util_apen_clear,              "clear",                            0);
     class_addmethod(c, (method)sc_util_apen_dump,               "dump",                             0);
-    //class_addmethod(c, (method)sc_util_apen_set_series_length,  "series_length",        A_LONG,     0);
-    //class_addmethod(c, (method)sc_util_apen_set_vector_size,    "vector_size",          A_LONG,     0);
-    //class_addmethod(c, (method)sc_util_apen_pattern_length,     "pattern_length",       A_LONG,     0);
-    //class_addmethod(c, (method)sc_util_apen_similarity,         "similarity",           A_FLOAT,    0);
-    //class_addmethod(c, (method)sc_util_apen_calc_on_input,      "calculate_on_input",   A_LONG,     0);
     class_addmethod(c, (method)sc_util_apen_hold_size_warning,  "size_warning",         A_LONG,     0);
     class_addmethod(c, (method)sc_util_apen_anything,           "anything",             A_GIMME,    0);
     class_addmethod(c, (method)sc_util_apen_int,                "int",                  A_LONG,     0);
     class_addmethod(c, (method)sc_util_apen_notify,             "notify",               A_CANT,     0);
     class_addmethod(c, (method)sc_util_apen_float,              "float",                A_FLOAT,    0);
     class_addmethod(c, (method)sc_util_apen_getstate,           "getstate",                         0);
-    
-    //method versions of the attributes, last argument is default value
-    //CLASS_METHOD_ATTR_PARSE(c, "series_length",         "series_length",            gensym("long"),     0, "1");
-    //CLASS_METHOD_ATTR_PARSE(c, "vector_size",           "vector_size",              gensym("long"),     0, "1");
-    CLASS_METHOD_ATTR_PARSE(c, "pattern_length",        "pattern_length",           gensym("long"),     0, "3");
-    //CLASS_METHOD_ATTR_PARSE(c, "similarity",            "similarity",               gensym("float"),    0, "3");
-    //CLASS_METHOD_ATTR_PARSE(c, "calculate_on_input",    "calculate_on_input",       gensym("long"),     0, "1");
-    CLASS_METHOD_ATTR_PARSE(c, "size_warning",          "suppress_size_warning",    gensym("long"),     0, "1");
-    
     
     //Symbol versions of attributes we want to be callable from the patcher
     CLASS_ATTR_LONG(c, "series_length",          0,                      t_sc_util_apen , series_max_length);
@@ -177,30 +146,8 @@ void sc_util_apen_free(t_sc_util_apen *x)
         double* t2 = temp;
         temp++;
         sysmem_freeptr(t2);
-        //t2 = NULL;
     }
-    //temp = NULL;
-    //set to NULL to clear
-    //x->test_value = NULL;
-    /*
-    //free all pointers and data associated with the series pointer
-    t_apen_series* t_temp = x->series;
-    for(int i = 0; (i < x->series_length || i < x->series_max_length) && t_temp; i++) {
-        double* dtemp = t_temp->data_vector;
-        for(int j = 0; j < x->series_vector_size; j++) {
-            double* dt2 = dtemp;
-            dtemp++;
-            sysmem_freeptr(dt2);
-        }
-        dtemp = NULL;
-        t_temp->data_vector = NULL;
-        t_apen_series* tt2 = t_temp;
-        t_temp++;
-        sysmem_freeptr(tt2);
-    }
-    x->series = NULL;
-    //systhread_mutex_free(x->c_mutex);
-     */
+
 }
 
 
@@ -298,43 +245,8 @@ void sc_util_apen_int(t_sc_util_apen *x, long n)
         sysmem_copyptr(temp2, temp, sizeof(double) * (x->series_max_length - 1));
         for(int i = 0; i < (x->series_max_length - 1); i++, temp++){}
         *temp = (double)n;
-        /*
-        for(int i = 1; i < x->series_max_length; i++, temp++, temp2++) {
-            sysmem_copyptr(temp2, temp, sizeof(double));
-        }
-        */
-        //*temp = (double)n;
+
     }
-     
-    /* TESTING CODE
-    if(x->series_vector_size == 1) {
-        if(x->series_length < x->series_max_length) {
-            t_apen_series* temp = x->series;
-            for(int i = 0; i < x->series_length; i++, temp++) {}
-            if(temp) {
-                double* dtemp = temp->data_vector;
-                if(dtemp){
-                    *dtemp = (double)n;
-                    x->series_length++;
-                } else {
-                    object_error((t_object*)x, "Looks like I forgot to allocate some memory");
-                }
-            } else {
-                object_error((t_object*)x, "struct pointer is NULL");
-            }
-        } else {
-            t_apen_series* temp = x->series;
-            t_apen_series* temp2 = temp;
-            temp2++;
-            
-            for(int i = 1; i < x->series_max_length; i++, temp++, temp2++) {
-                sysmem_copyptr(temp2->data_vector, temp->data_vector, sizeof(double) * temp->vector_size);
-            }
-            
-            *(temp->data_vector) = (double)n;
-        }
-    }
-    */
     
     critical_exit(0);
     
@@ -372,161 +284,20 @@ void sc_util_apen_float(t_sc_util_apen *x, double f)
 
 void sc_util_apen_anything(t_sc_util_apen *x, t_symbol *s, long ac, t_atom *av)
 {
-    /*
-    //object_warn((t_object*) x, "Anything Function Called");
-    if(ac >= x->series_vector_size) {
-        if(ac > x->series_vector_size) {
-            object_warn((t_object *)x, "Received %d arguments when expecting %d, ignoring excess data", ac, x->series_vector_size);
-        }
-        
-        double data[x->series_vector_size];
-        
-        for(int i = 0; i < ac && i < x->series_vector_size; i++) {
-            switch(atom_gettype(av)) {
-                case A_LONG:
-                    data[i] = (double)atom_getlong(av);
-                    break;
-                case A_FLOAT:
-                    data[i] = atom_getfloat(av);
-                    break;
-                default:
-                    object_error((t_object *)x, "Received invalid data type, must be int or float");
-                    return;
-                    break;
-            }
-            av++;
-        }
-        
-        long apen_size = sizeof(t_apen_series);
-        
-        if(x->series_length == x->series_max_length) {
-            for(int i = x->series_length - 1; i > 0; i--) {
-                
-                //get rid of old pointers
-                if(i == (x->series_length - 1)) {
-                    t_apen_series* temp = &x->series[i];
-                    double* dtemp = temp->data_vector;
-                    
-                    sysmem_freeptr(temp);
-                }
-                
-                x->series[i] = x->series[i - 1];
-            }
-            
-            
-            
-            
-        }
-        /*
-         * Create and add Data Point
-         */
-        /*
-    } else {
-        object_error((t_object *)x, "Insufficient Values received, got %d, expected %d", ac, x->series_vector_size);
-    } */
     object_warn((t_object*)x, "Received something I'm unsure about");
 }
 
+//attempt calculating the current ApEn value without adding new data
 void sc_util_apen_bang(t_sc_util_apen *x)
 {
-    /* TESTING CODE
-    double* temp = x->test_value;
-    
-    if(x->series_length > 0) {
-        for(int i = 0; i < x->series_length && temp; i++, temp++) {
-            outlet_float(x->out, *temp);
-        }
-    }
-     */
-    
-    
-    //if(x->series_length > 0)
-    
-    //outlet_bang(x->out);
-    
     sc_util_apen_calculate(x);
 }
 
-t_apen_series create_apen_series(double* data, long size) {
-    
-    t_apen_series as;
-    as.vector_size = size;
-    double vector[size];
-    as.data_vector = (double*)sysmem_newptr(sizeof(double)); //create a new pointer using cycling 74 function
-    as.data_vector = vector; //assign the array to the series struct
-    double* temp = as.data_vector;
-    double* temp2 = data;
-    for(int i = 0; i < size; i++) {
-        *temp = *temp2;
-        temp++;
-        temp2++;
-    }
-    
-    return as;
-}
-
-void add_apen_series(t_sc_util_apen *x, t_apen_series as) {
-    
-    critical_enter();//make sure things cannot be modified
-    /*
-     * Operate on stored data
-     */
-    if(x->series_length < x->series_max_length) { //handle occassions when the data length os less than the maximum
-        t_apen_series *temp = x->series;
-        for(int i = 0; i < x->series_length; i++, temp++){}
-        
-        *temp = as;
-        x->series_length++;
-    } else {
-        t_apen_series *temp = x->series;
-        for(int i = 0; i < x->series_max_length; i++, temp++){} //move to the end of the array
-        t_apen_series *temp2 = temp;
-        temp2--;
-        int i = x->series_max_length - 2;
-        do {
-            *temp = *temp2;
-            temp--, temp2--; //decrement pointers
-            i--; //decrement counter
-        } while (i > 0);
-        *temp2 = as;
-    }
-    critical_exit(); //release the lock
-}
 
 void sc_util_apen_dump(t_sc_util_apen *x) {
  
     critical_tryenter(0);
-    /*if(x->series_length > 0) {
-        t_apen_series* temp = x->series;
-        for(int i = 0; i < x->series_length; i++, temp++) {
-            double* dtemp = temp->data_vector;
-            for(int j = 0; j < temp->vector_size; j++, dtemp++) {
-                object_post((t_object*)x, "%d - %d: %f", i, j, *dtemp);
-            }
-        }
-    }
-     
-    
-    long atom_count = x->series_length + 1;
-    char alloc;
-    t_atom** values;
-    long allocated = 0;
-    long *allAddr = &allocated;
-    
-    atom_alloc_array(atom_count, allAddr, values, &alloc);
-    if(alloc == 1) {
-        atom_setsym(*values, gensym("values"));
-        
-        t_atom** temp = values;
-        temp++;
-        double* d = x->test_value;
-        for(int i = 1; i < allocated; i++, temp++, d++){
-            atom_setfloat(*temp, *d);
-        }
-        
-        outlet_atoms(x->out, allocated, *values);
-    }
-    */
+
     if(x->series_length > 0){
         double* d = x->test_value;
         
@@ -551,21 +322,7 @@ void sc_util_apen_dump(t_sc_util_apen *x) {
 void sc_util_apen_clear(t_sc_util_apen *x){
     
     critical_enter(0);
-    /*
-    //STEP 1: set old data to 0
-    void* empty = sysmem_newptr(sizeof(double) * x->series_vector_size); //empty allocated pointer to copy from. Faster than individually setting elements to 0
-    
-    t_apen_series* temp = x->series;
-    for(int i = 0; (i < x->series_length) && temp; i++, temp++) {
-        double* dtemp = temp->data_vector;
-        sysmem_copyptr(empty, dtemp, sizeof(double) * x->series_vector_size);
-    }
-    
-     sysmem_freeptr(empty);
-    */
-    //STEP 2: set series length to 0
-    //x->series_length = 0;
-    
+
     void* emptyd = sysmem_newptr(sizeof(double) * x->series_max_length);
     
     sysmem_copyptr(emptyd, x->test_value, sizeof(double) * x->series_max_length);
@@ -648,12 +405,6 @@ void sc_util_apen_set_vector_size(t_sc_util_apen *x, void *attr, long argc, t_at
                 return;
                 break;
         }
-        /*
-        if(temp_vs > 0) {
-            //x->series_vector_size = temp_vs;
-            sc_util_apen_realloc_data(x, temp_vs);
-            x->series_length = 0;
-         */
         if(temp_vs > 0) {
             x->series_vector_size = 1;
         } else {
@@ -817,30 +568,21 @@ void *sc_util_apen_new(t_symbol *s, long argc, t_atom *argv)
     
 
 	if ((x = (t_sc_util_apen *)object_alloc(sc_util_apen_class))) {
-        //poststring("Setting initial values");
+        //Set initial values
         x->calc_on_input = 1;
         x->hold_size_warning = 1;
         x->pattern_length = 3;
         x->series_length = 0;
-        x->series_vector_size = 1;
+        x->series_vector_size = 1; //for N-D vectors
         x->series_max_length = 50;
         x->similarity = 1.0;
-        //x->series = (t_apen_series*)sysmem_newptr(sizeof(t_apen_series) * x->series_max_length);
 		x->out = outlet_new(x, 0L);
         x->out2 = outlet_new(x, NULL);
-        //t_apen_series* temp = x->series;
-        /*
-        for(int i = 0; i < x->series_max_length; i++, temp++) {
-            temp->vector_size = x->series_vector_size;
-            temp->data_vector = (double*)sysmem_newptr(sizeof(double) * x->series_vector_size);
-        }
-         */
         
-        //testing sysmem functions
-        double* temp2 = (double*)sysmem_newptr(sizeof(double) * x->series_max_length);
+        //allocate memory for the initial data series
+        x->test_value = (double*)sysmem_newptr(sizeof(double) * x->series_max_length);
         
-        x->test_value = temp2;
-        
+        //process arguments typed into object box
         attr_args_process(x, argc, argv);
         
     } else {
@@ -851,51 +593,44 @@ void *sc_util_apen_new(t_symbol *s, long argc, t_atom *argv)
 	return (x);
 }
 
-void sc_util_apen_realloc_data(t_sc_util_apen *x, long vsize_new) {
-    if(x->series) {
-        //dealloc old data
-    }
-    
-    x->series = NULL;
-    
-    //allocate new data
-    x->series = (t_apen_series*) sysmem_newptr(sizeof(t_apen_series) * x->series_max_length);
-    x->series_vector_size = vsize_new;
-    
-    t_apen_series* temp = x->series;
-    
-    for(int i = 0; i < x->series_max_length; i++, temp++) {
-        temp->vector_size = x->series_vector_size;
-        temp->data_vector = (double*)sysmem_newptr(sizeof(double) * temp->vector_size);
-    }
-}
-
 void sc_util_apen_calculate(t_sc_util_apen *x) {
+    
+    //check to make sure there is enough stored data to get meaningful results
     if(x->series_length < x->pattern_length * 2) {
-        if(x->hold_size_warning == 1){
+        //check if the user has declined to have warnings sent to the console when there is insufficient data
+        if(x->hold_size_warning == 1){ //warn user of insufficient data
             object_warn((t_object*)x, "Not enough data to calculate approximate entropy.");
             object_warn((t_object*)x, "Need %d data points, have %d", x->pattern_length * 2, x->series_length);
         }
+        //exit function, do not attempt to calculate
         return;
     } else {
         
         //STEP 1 : Compute for pattern length
-        double m0[x->series_length - x->pattern_length + 1];
-        double avg_ratio0 = 0;
+        double m0[x->series_length - x->pattern_length + 1]; //array for holding number of windows within similarity index of current window
+        double avg_ratio0 = 0; //average number of windows within the similarity index for Cm(0...i)
+        
+        //temporary pointer to the data set
         double* temp = x->test_value;
+        
+        //outer loop for iterating through each possible window included in the data set of size m (pattern length)
         for(int i = 0; i < x->series_length - x->pattern_length + 1; i++, temp++) {
-            m0[i] = 0.0;
-            double* temp2 = x->test_value;
+            m0[i] = 0.0; //initialize current index value
+            double* temp2 = x->test_value; //second temporary pointer to data set
+            //inner loop, iterate through all possible windows of size m to compare against the current window from the outer loop
             for(int j = 0; j < x->series_length - x->pattern_length + 1; j++, temp2++) {
+                //compute the maximum distance between elements in both windows, add 1 to the index value if lees than or equal to similarity index
                 m0[i] += (sc_util_apen_maxdist(temp, temp2, x->pattern_length, x->similarity) <= x->similarity) ? 1 : 0;
             }
-            
+            //get the percent of windows similar enough (total # of similar windows / total number of windows)
             m0[i] /= (x->series_length - x->pattern_length) + 1;
+            //add to the average variable
             avg_ratio0 += m0[i];
         }
+        //take the average percentage (Ci(m))
         avg_ratio0 /= (x->series_length - x->pattern_length) + 1;
         
-        //STEP 1 : Compute for pattern length + 1
+        //STEP 2 : Compute for pattern length + 1
         double m1[x->series_length - (x->pattern_length + 1) + 1];
         double avg_ratio1 = 0;
         temp = x->test_value;
@@ -908,14 +643,39 @@ void sc_util_apen_calculate(t_sc_util_apen *x) {
             m1[i] /= x->series_length - (x->pattern_length + 1) + 1;
             avg_ratio1 += m1[i];
         }
+        
+        //Ci(m+1)
         avg_ratio1 /= x->series_length - (x->pattern_length + 1) + 1;
         
-        double apen = log(avg_ratio0 / ((avg_ratio1 > 0.0) ? avg_ratio1 : 0.0000001));
+        //STEP 3: get the Approximate Entropy as the Natural Logarithm of (Ci(m) / Ci(m)+1)
+        double apen = log(avg_ratio0 / ((avg_ratio1 > 0.0) ? avg_ratio1 : 0.0000001)); //included a way to avoid division by 0 errors
         
+        //outlet the value to the user
         outlet_float(x->out2, apen);
     }
 }
 
+//function for calculating the maximum pair-wise distance of members between two vectors
+/* The function only compares members at matching indeces.
+ Example:
+ 
+ Vec1:          Vec2:           Dist:
+ 1     ->       5        =      4
+ 2     ->       4        =      2
+ 3     ->       3        =      0
+ 4     ->       2        =      2
+ 5     ->       1        =      4
+ 
+ Maximum Distance : 4
+ 
+ */
+
+/* Paramters
+ d0 - Double pointer to vector 0
+ d1 - Double pointer to vector 1
+ l - long size of both vectors, vectors should be the same length
+ r - similarity index. used for optimizing when a distance is greater than the similarity index.
+ */
 double sc_util_apen_maxdist(double* d0, double* d1, long l, double r) {
     double md = 0.0;
     
@@ -926,7 +686,7 @@ double sc_util_apen_maxdist(double* d0, double* d1, long l, double r) {
         t2++;
         for(int j = 1; j < (l - i); j++, t2++){
            md = (fabs(*t2 - *t) > md) ? md = fabs(*t2 - *t) : md;
-            if(md > r) {
+            if(md > r) { //if the distance exceeds the similarity index r, just return the value, no need to calculate further
                 return md;
             }
         }
