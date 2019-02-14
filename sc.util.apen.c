@@ -347,6 +347,10 @@ void sc_util_apen_list(t_sc_util_apen *x, t_symbol* a, long argc, t_atom *argv) 
     }
     
     x->series_length += data_size;
+    
+    if(x->calc_on_input == 1) {
+        sc_util_apen_calculate(x);
+    }
 }
 
 void sc_util_apen_anything(t_sc_util_apen *x, t_symbol *s, long ac, t_atom *av)
