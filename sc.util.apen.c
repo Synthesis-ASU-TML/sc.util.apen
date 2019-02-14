@@ -76,7 +76,7 @@ void ext_main(void *r)
 {
 	t_class *c;
 
-	c = class_new("sc.util.apen", (method)sc_util_apen_new, (method)sc_util_apen_free, (long)sizeof(t_sc_util_apen),
+	c = class_new("sc.apen", (method)sc_util_apen_new, (method)sc_util_apen_free, (long)sizeof(t_sc_util_apen),
 				  0L /* leave NULL!! */, A_GIMME, 0);
 
 	class_addmethod(c, (method)sc_util_apen_bang,			    "bang",                             0);
@@ -140,12 +140,14 @@ void sc_util_apen_assist(t_sc_util_apen *x, void *b, long m, long a, char *s)
 
 void sc_util_apen_free(t_sc_util_apen *x)
 {
-    //start by freeing the test values (we'll get rid of this soon)
-    double* temp = x->test_value;
-    for(int i = 0; (i < x->series_length || i < x->series_max_length) && temp; i++) {
-        double* t2 = temp;
-        temp++;
-        sysmem_freeptr(t2);
+    //start by freeing the test values
+    if(x->test_value) {
+        double* temp = x->test_value;
+        for(int i = 0; i < x->series_max_length && temp; i++) {
+            double* t2 = temp;
+            temp++;
+            sysmem_freeptr(t2);
+        }
     }
 
 }
@@ -232,9 +234,7 @@ void sc_util_apen_int(t_sc_util_apen *x, long n)
     critical_enter(0);
     
     if(x->series_length < x->series_max_length) {
-        double* temp = x->test_value;
-        for(int i = 0; i < x->series_length; i++, temp++){}
-        
+        double* temp = x->test_value + x->series_length;
         *temp = (double) n;
         x->series_length++;
     } else {
@@ -243,7 +243,7 @@ void sc_util_apen_int(t_sc_util_apen *x, long n)
         temp2++;
         
         sysmem_copyptr(temp2, temp, sizeof(double) * (x->series_max_length - 1));
-        for(int i = 0; i < (x->series_max_length - 1); i++, temp++){}
+        temp = x->test_value + (x->series_max_length - 1);
         *temp = (double)n;
 
     }
@@ -260,8 +260,7 @@ void sc_util_apen_float(t_sc_util_apen *x, double f)
     critical_enter(0);
     
     if(x->series_length < x->series_max_length) {
-        double* temp = x->test_value;
-        for(int i = 0; i < x->series_length; i++, temp++){}
+        double* temp = x->test_value + x->series_length;
         
         *temp = f;
         x->series_length++;
@@ -271,7 +270,7 @@ void sc_util_apen_float(t_sc_util_apen *x, double f)
         temp2++;
         
         sysmem_copyptr(temp2, temp, sizeof(double) * (x->series_max_length - 1));
-        for(int i = 0; i < (x->series_max_length - 1); i++, temp++){}
+        temp = x->test_value + (x->series_max_length - 1);
         *temp = f;
     }
     
@@ -323,11 +322,13 @@ void sc_util_apen_clear(t_sc_util_apen *x){
     
     critical_enter(0);
 
-    void* emptyd = sysmem_newptr(sizeof(double) * x->series_max_length);
+    double* temp = x->test_value;
     
-    sysmem_copyptr(emptyd, x->test_value, sizeof(double) * x->series_max_length);
+    for(int i = 0; i < x->series_length; i++, temp++) {
+        *temp = 0;
+    }
+    
     x->series_length = 0;
-    sysmem_freeptr(emptyd);
     
     critical_exit(0);
     
