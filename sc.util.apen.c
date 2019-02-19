@@ -67,6 +67,7 @@ void sc_util_apen_getstate(t_sc_util_apen* x); //output all values through the d
 //Functions for inputting new data
 void sc_util_apen_int(t_sc_util_apen *x, long n);
 void sc_util_apen_float(t_sc_util_apen *x, double f);
+void sc_util_apen_list(t_sc_util_apen *x, t_symbol* a, long argc, t_atom *argv);
 
 //////////////////////// global class pointer variable
 void *sc_util_apen_class;
@@ -76,18 +77,19 @@ void ext_main(void *r)
 {
 	t_class *c;
 
-	c = class_new("sc.util.apen", (method)sc_util_apen_new, (method)sc_util_apen_free, (long)sizeof(t_sc_util_apen),
+	c = class_new("sc.apen", (method)sc_util_apen_new, (method)sc_util_apen_free, (long)sizeof(t_sc_util_apen),
 				  0L /* leave NULL!! */, A_GIMME, 0);
 
 	class_addmethod(c, (method)sc_util_apen_bang,			    "bang",                             0);
     class_addmethod(c, (method)sc_util_apen_clear,              "clear",                            0);
     class_addmethod(c, (method)sc_util_apen_dump,               "dump",                             0);
-    class_addmethod(c, (method)sc_util_apen_hold_size_warning,  "size_warning",         A_LONG,     0);
+    //class_addmethod(c, (method)sc_util_apen_hold_size_warning,  "size_warning",         A_LONG,     0);
     class_addmethod(c, (method)sc_util_apen_anything,           "anything",             A_GIMME,    0);
     class_addmethod(c, (method)sc_util_apen_int,                "int",                  A_LONG,     0);
     class_addmethod(c, (method)sc_util_apen_notify,             "notify",               A_CANT,     0);
     class_addmethod(c, (method)sc_util_apen_float,              "float",                A_FLOAT,    0);
     class_addmethod(c, (method)sc_util_apen_getstate,           "getstate",                         0);
+    class_addmethod(c, (method)sc_util_apen_list,               "list",                 A_GIMME,    0);
     
     //Symbol versions of attributes we want to be callable from the patcher
     CLASS_ATTR_LONG(c, "series_length",          0,                      t_sc_util_apen , series_max_length);
@@ -140,12 +142,14 @@ void sc_util_apen_assist(t_sc_util_apen *x, void *b, long m, long a, char *s)
 
 void sc_util_apen_free(t_sc_util_apen *x)
 {
-    //start by freeing the test values (we'll get rid of this soon)
-    double* temp = x->test_value;
-    for(int i = 0; (i < x->series_length || i < x->series_max_length) && temp; i++) {
-        double* t2 = temp;
-        temp++;
-        sysmem_freeptr(t2);
+    //start by freeing the test values
+    if(x->test_value) {
+        double* temp = x->test_value;
+        for(int i = 0; i < x->series_max_length && temp; i++) {
+            double* t2 = temp;
+            temp++;
+            sysmem_freeptr(t2);
+        }
     }
 
 }
@@ -232,9 +236,7 @@ void sc_util_apen_int(t_sc_util_apen *x, long n)
     critical_enter(0);
     
     if(x->series_length < x->series_max_length) {
-        double* temp = x->test_value;
-        for(int i = 0; i < x->series_length; i++, temp++){}
-        
+        double* temp = x->test_value + x->series_length;
         *temp = (double) n;
         x->series_length++;
     } else {
@@ -243,7 +245,7 @@ void sc_util_apen_int(t_sc_util_apen *x, long n)
         temp2++;
         
         sysmem_copyptr(temp2, temp, sizeof(double) * (x->series_max_length - 1));
-        for(int i = 0; i < (x->series_max_length - 1); i++, temp++){}
+        temp = x->test_value + (x->series_max_length - 1);
         *temp = (double)n;
 
     }
@@ -260,8 +262,7 @@ void sc_util_apen_float(t_sc_util_apen *x, double f)
     critical_enter(0);
     
     if(x->series_length < x->series_max_length) {
-        double* temp = x->test_value;
-        for(int i = 0; i < x->series_length; i++, temp++){}
+        double* temp = x->test_value + x->series_length;
         
         *temp = f;
         x->series_length++;
@@ -271,11 +272,81 @@ void sc_util_apen_float(t_sc_util_apen *x, double f)
         temp2++;
         
         sysmem_copyptr(temp2, temp, sizeof(double) * (x->series_max_length - 1));
-        for(int i = 0; i < (x->series_max_length - 1); i++, temp++){}
+        temp = x->test_value + (x->series_max_length - 1);
         *temp = f;
     }
     
     critical_exit(0);
+    
+    if(x->calc_on_input == 1) {
+        sc_util_apen_calculate(x);
+    }
+}
+
+void sc_util_apen_list(t_sc_util_apen *x, t_symbol* a, long argc, t_atom *argv) {
+    t_atom* arg_temp = argv;
+    for(int i = 0; i < argc; i++, arg_temp++) {
+        switch(atom_gettype(arg_temp)) {
+            case A_LONG:
+                break;
+            case A_FLOAT:
+                break;
+            default:
+                object_warn((t_object*)x, "Received non-numeric input");
+                return;
+        }
+    }
+    
+    arg_temp = argv;
+    int idx = 0;
+    double* data_list;
+    long data_size = argc;
+    if(argc > x->series_max_length) {
+        arg_temp += argc - x->series_max_length;
+        idx = argc - x->series_max_length;
+        data_size = x->series_max_length;
+    }
+    
+    data_list = (double*)sysmem_newptr(sizeof(double) * data_size);
+    
+    double* data_temp = data_list;
+    
+    for(; idx < argc; idx++, arg_temp++, data_temp++) {
+        switch(atom_gettype(arg_temp)) {
+            case A_LONG:
+                *data_temp = (double)atom_getlong(arg_temp);
+                break;
+            case A_FLOAT:
+                *data_temp = atom_getfloat(arg_temp);
+                break;
+        }
+    }
+    
+    long tot_size = x->series_length + data_size;
+    
+    long del_idx = 0;
+    
+    if(tot_size > x->series_max_length) {
+        del_idx = tot_size - x->series_max_length;
+        double* temp0 = x->test_value + del_idx;
+        double* temp1 = x->test_value;
+        sysmem_copyptr(temp0, temp1, sizeof(double) * (x->series_max_length - del_idx));
+        x->series_length = (x->series_length - del_idx > 0) ? (x->series_length - del_idx) : 0;
+    }
+    
+    double* temp = x->test_value + x->series_length;
+    
+    sysmem_copyptr(data_list, temp, sizeof(double) * data_size);
+    
+    //free data
+    data_temp = data_list;
+    for(int i = 0; i < data_size; i++) {
+        double* d2 = data_temp;
+        data_temp++;
+        sysmem_freeptr(d2);
+    }
+    
+    x->series_length += data_size;
     
     if(x->calc_on_input == 1) {
         sc_util_apen_calculate(x);
@@ -323,11 +394,13 @@ void sc_util_apen_clear(t_sc_util_apen *x){
     
     critical_enter(0);
 
-    void* emptyd = sysmem_newptr(sizeof(double) * x->series_max_length);
+    double* temp = x->test_value;
     
-    sysmem_copyptr(emptyd, x->test_value, sizeof(double) * x->series_max_length);
+    for(int i = 0; i < x->series_length; i++, temp++) {
+        *temp = 0;
+    }
+    
     x->series_length = 0;
-    sysmem_freeptr(emptyd);
     
     critical_exit(0);
     
@@ -373,7 +446,7 @@ void sc_util_apen_set_series_length(t_sc_util_apen *x, void *attr, long argc, t_
             x->series_max_length = temp_sl;
             
             critical_exit(0);
-        } else {
+        } else if(temp_sl != x->series_max_length){
             object_error((t_object *)x, "Series length too short, must >= %d", (2 * x->pattern_length) + 1);
         }
     }
@@ -544,8 +617,8 @@ void sc_util_apen_hold_size_warning(t_sc_util_apen *x, void *attr, long argc, t_
                 return;
                 break;
         }
-        if(temp_sw > 1) {temp_sw = 1;}
-        if(temp_sw < 0) {temp_sw = 0;}
+        if(temp_sw >= 1) {temp_sw = 1;}
+        if(temp_sw <= 0) {temp_sw = 0;}
         
         x->hold_size_warning = temp_sw;
     }
